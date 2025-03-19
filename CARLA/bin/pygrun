@@ -1,0 +1,12 @@
+#!/home/ajaya/UCR/CISL/scenario_runner/CARLA/bin/python3
+# EASY-INSTALL-ENTRY-SCRIPT: 'antlr4-python3-runtime==4.10','console_scripts','pygrun'
+__requires__ = 'antlr4-python3-runtime==4.10'
+import re
+import sys
+from pkg_resources import load_entry_point
+
+if __name__ == '__main__':
+    sys.argv[0] = re.sub(r'(-script\.pyw?|\.exe)?$', '', sys.argv[0])
+    sys.exit(
+        load_entry_point('antlr4-python3-runtime==4.10', 'console_scripts', 'pygrun')()
+    )

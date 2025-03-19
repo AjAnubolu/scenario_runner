@@ -1,0 +1,9 @@
+<?xml version="1.0"?>
+<scenarios>
+    <scenario name="LowVisibilityNight1" type="LowVisibilityNightDriving" town="Town03">
+        <ego_vehicle x="207" y="59" z="0" yaw="180" model="vehicle.tesla.model3" rolename="hero"/>
+    </scenario>
+    <scenario name="LowVisibilityNight2" type="LowVisibilityNightDriving" town="Town04">
+        <ego_vehicle x="269" y="-246" z="0" yaw="0" model="vehicle.tesla.model3" rolename="hero"/>
+    </scenario>
+</scenarios>
