@@ -178,13 +178,28 @@ class World(object):
                 self.player = None
                 self.destroy()
                 self.restart()
-
+                
+        # Start new frame for profiling
+        from srunner.scenarios.low_visibility_night import latency_profiler
+        latency_profiler.start_frame()
+        
         self.hud.tick(self, clock)
+        
+        # End frame for profiling
+        latency_profiler.end_frame()
         return True
 
     def render(self, display):
+        # Profile rendering
+        from srunner.scenarios.low_visibility_night import latency_profiler
+        
+        latency_profiler.start_task("camera_render")
         self.camera_manager.render(display)
+        latency_profiler.end_task("camera_render")
+        
+        latency_profiler.start_task("hud_render")
         self.hud.render(display)
+        latency_profiler.end_task("hud_render")
 
     def destroy_sensors(self):
         self.camera_manager.sensor.destroy()
@@ -362,7 +377,14 @@ class KeyboardControl(object):
 
     @staticmethod
     def _is_quit_shortcut(key):
-        return (key == K_ESCAPE) or (key == K_q and pygame.key.get_mods() & KMOD_CTRL)
+        # Handle Escape key for profiling
+        if key == K_ESCAPE:
+            # Import the profiler from the low visibility night module
+            from srunner.scenarios.low_visibility_night import latency_profiler
+            report = latency_profiler.stop_profiling()
+            print("\n" + report)
+            return True
+        return (key == K_q and pygame.key.get_mods() & KMOD_CTRL)
 
 
 # ==============================================================================
@@ -973,7 +995,32 @@ def main():
         '--wait-for-repetitions',
         action='store_true',
         help='Avoids stopping the manual control when the scenario ends.')
+    argparser.add_argument(
+        '--profile',
+        action='store_true',
+        help='Enable latency profiling')
     args = argparser.parse_args()
+    
+    # Enable profiling if requested
+    if args.profile:
+        try:
+            # Force import of low_visibility_night module to make sure profiler is available
+            import importlib
+            import sys
+            # Add the scenario_runner directory to sys.path if not already there
+            sys.path.append(os.path.dirname(os.path.abspath(__file__)))
+            
+            # Import or reload the module to ensure we get the latest version
+            if 'srunner.scenarios.low_visibility_night' in sys.modules:
+                importlib.reload(sys.modules['srunner.scenarios.low_visibility_night'])
+            else:
+                importlib.import_module('srunner.scenarios.low_visibility_night')
+            
+            from srunner.scenarios.low_visibility_night import latency_profiler
+            latency_profiler.start_profiling()
+            print("Latency profiling enabled. Press ESC to quit and see report.")
+        except (ImportError, ModuleNotFoundError) as e:
+            print(f"WARNING: Could not import latency profiler: {e}. Profiling disabled.")
 
     args.width, args.height = [int(x) for x in args.res.split('x')]
 
