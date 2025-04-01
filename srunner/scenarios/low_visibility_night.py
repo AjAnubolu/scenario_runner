@@ -32,6 +32,14 @@ class LatencyProfiler:
         self.running_tasks = {}
         self.should_profile = False
         self.complete_report = []
+        
+        # Import numpy up front to avoid import inside the report generation
+        try:
+            import numpy as np
+            self.np = np
+        except ImportError:
+            print("WARNING: NumPy not available. Statistical analysis will be limited.")
+            self.np = None
 
     def start_profiling(self):
         """Enable profiling"""
@@ -96,20 +104,66 @@ class LatencyProfiler:
         del self.running_tasks[task_name]
 
     def generate_report(self):
-        """Generate a text report of all profiling data"""
+        """Generate a text report of all profiling data with statistics"""
         if not self.complete_report:
             return "No profiling data available"
-            
+        
+        # Collect all task durations by task name
+        task_stats = {}
+        for frame_data in self.complete_report:
+            for task_name, duration in frame_data["tasks"].items():
+                if task_name not in task_stats:
+                    task_stats[task_name] = []
+                task_stats[task_name].append(duration)
+        
+        # Generate report
         report = "Latency Profiling Report:\n"
         report += "========================\n\n"
         
-        for frame_data in self.complete_report:
+        # Print individual frame data (show only last 5 frames for brevity)
+        max_frames_to_show = 5
+        frames_to_show = self.complete_report[-max_frames_to_show:] if len(self.complete_report) > max_frames_to_show else self.complete_report
+        
+        for frame_data in frames_to_show:
             frame_num = frame_data["frame"]
             report += f"Frame {frame_num}:\n"
             
             for task_name, duration in frame_data["tasks"].items():
                 report += f"  {task_name}: {duration:.2f} ms\n"
             
+            report += "\n"
+        
+        # Add statistical summary
+        report += "Statistical Summary:\n"
+        report += "====================\n\n"
+        
+        for task_name, durations in task_stats.items():
+            if not durations:
+                continue
+                
+            # Calculate statistics
+            if self.np:
+                # Use NumPy for accurate statistics
+                mean = self.np.mean(durations)
+                std_dev = self.np.std(durations)
+                variance = self.np.var(durations)
+                minimum = self.np.min(durations)
+                maximum = self.np.max(durations)
+            else:
+                # Fallback to basic Python statistics if NumPy not available
+                mean = sum(durations) / len(durations)
+                variance = sum((x - mean) ** 2 for x in durations) / len(durations)
+                std_dev = variance ** 0.5
+                minimum = min(durations)
+                maximum = max(durations)
+            
+            report += f"Task: {task_name}\n"
+            report += f"  Count: {len(durations)}\n"
+            report += f"  Mean: {mean:.2f} ms\n"
+            report += f"  Std Dev: {std_dev:.2f} ms\n"
+            report += f"  Variance: {variance:.2f} ms²\n"
+            report += f"  Min: {minimum:.2f} ms\n"
+            report += f"  Max: {maximum:.2f} ms\n"
             report += "\n"
             
         return report
