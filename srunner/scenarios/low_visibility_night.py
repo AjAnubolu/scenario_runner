@@ -32,6 +32,11 @@ class LatencyProfiler:
         self.running_tasks = {}
         self.should_profile = False
         self.complete_report = []
+        # Store current frame metrics for HUD display
+        self.current_metrics = {}
+        # Store recent history for moving average
+        self.metrics_history = {}
+        self.history_length = 30  # Number of frames to keep for moving average
         
         # Import numpy up front to avoid import inside the report generation
         try:
@@ -62,6 +67,8 @@ class LatencyProfiler:
         
         self.current_frame += 1
         self.frame_data[self.current_frame] = {}
+        # Clear current metrics for the new frame
+        self.current_metrics = {}
 
     def end_frame(self):
         """End the current frame and close any lingering tasks"""
@@ -101,8 +108,44 @@ class LatencyProfiler:
             self.frame_data[self.current_frame] = {}
             
         self.frame_data[self.current_frame][task_name] = elapsed
+        
+        # Update current metrics for HUD display
+        self.current_metrics[task_name] = elapsed
+        
+        # Update metrics history for moving average
+        if task_name not in self.metrics_history:
+            self.metrics_history[task_name] = []
+            
+        self.metrics_history[task_name].append(elapsed)
+        if len(self.metrics_history[task_name]) > self.history_length:
+            self.metrics_history[task_name].pop(0)
+            
         del self.running_tasks[task_name]
 
+    def get_current_metrics(self):
+        """Return current metrics with moving averages for HUD display"""
+        if not self.should_profile:
+            return {}
+            
+        result = {}
+        for task_name, history in self.metrics_history.items():
+            if history:
+                avg = sum(history) / len(history)
+                
+                current = 0
+                if task_name in self.current_metrics:
+                    current = self.current_metrics[task_name]
+                elif task_name in self.frame_data.get(self.current_frame, {}):
+                    current = self.frame_data[self.current_frame][task_name]
+                elif history:
+                    current = history[-1]
+                    
+                result[task_name] = {
+                    'current': current,
+                    'average': avg
+                }
+        return result
+        
     def generate_report(self):
         """Generate a text report of all profiling data with statistics"""
         if not self.complete_report:
@@ -189,9 +232,9 @@ class SetWeather(py_trees.behaviour.Behaviour):
         """
         Set the given weather
         """
-        latency_profiler.start_task("set_weather")
+        latency_profiler.start_task("weather")
         CarlaDataProvider.get_world().set_weather(self._weather)
-        latency_profiler.end_task("set_weather")
+        latency_profiler.end_task("weather")
         return py_trees.common.Status.SUCCESS
 
 
@@ -210,17 +253,19 @@ class LowVisibilityNightDriving(BasicScenario):
         self.timeout = timeout
         
         # Night weather parameters
+        latency_profiler.start_task("weather")
         self._night_weather = carla.WeatherParameters(
-            cloudiness=90.0,
-            precipitation=60.0,
-            precipitation_deposits=60.0,
-            wind_intensity=30.0,
+            cloudiness=60.0,           # Further reduced cloudiness for more light
+            precipitation=40.0,        # Less rain for better visibility
+            precipitation_deposits=50.0,
+            wind_intensity=25.0,
             sun_azimuth_angle=0.0, 
-            sun_altitude_angle=-80.0,
-            fog_density=60.0,
-            fog_distance=0.0,
-            wetness=50.0
+            sun_altitude_angle=-40.0,  # Much higher sun angle (early dusk)
+            fog_density=30.0,          # Significantly reduced fog
+            fog_distance=20.0,         # Greater fog distance for visibility
+            wetness=40.0              # Less wetness
         )
+        latency_profiler.end_task("weather")
         
         super(LowVisibilityNightDriving, self).__init__("LowVisibilityNightDriving",
                                                        ego_vehicles,
@@ -237,11 +282,13 @@ class LowVisibilityNightDriving(BasicScenario):
     def _create_behavior(self):
         """
         """
-        latency_profiler.start_task("create_behavior")
+        latency_profiler.start_task("scenario_setup")
         sequence = py_trees.composites.Sequence("Sequence Behavior")
         
-        # Set up the weather
+        # Set up the weather - measure separately to ensure weather profiling
+        latency_profiler.start_task("weather")
         weather_behavior = SetWeather(self._night_weather)
+        latency_profiler.end_task("weather")
         sequence.add_child(weather_behavior)
         
         # Add other vehicles with headlights on
@@ -250,14 +297,14 @@ class LowVisibilityNightDriving(BasicScenario):
         # Add idle behavior to keep scenario running
         sequence.add_child(Idle())
         
-        latency_profiler.end_task("create_behavior")
+        latency_profiler.end_task("scenario_setup")
         return sequence
         
     def _add_other_vehicles(self):
         """
         Add other vehicles to the scenario with headlights on
         """
-        latency_profiler.start_task("add_vehicles")
+        latency_profiler.start_task("vehicles")
         # Add 5 vehicles ahead with lights
         for i in range(5):
             # Get a location ahead of the ego vehicle
@@ -280,25 +327,25 @@ class LowVisibilityNightDriving(BasicScenario):
                 # Skip setting light state as it's causing API compatibility issues
                 
                 # Set autopilot
-                latency_profiler.start_task(f"set_autopilot_{i}")
+                latency_profiler.start_task("vehicles")
                 vehicle.set_autopilot(True)
-                latency_profiler.end_task(f"set_autopilot_{i}")
+                latency_profiler.end_task("vehicles")
         
-        latency_profiler.end_task("add_vehicles")
+        latency_profiler.end_task("vehicles")
 
     def _create_test_criteria(self):
         """
         A list of all test criteria will be created that is later used
         in parallel behavior tree.
         """
-        latency_profiler.start_task("create_test_criteria")
+        latency_profiler.start_task("scenario_setup")
         criteria = []
 
         for ego_vehicle in self.ego_vehicles:
             collision_criterion = CollisionTest(ego_vehicle)
             criteria.append(collision_criterion)
 
-        latency_profiler.end_task("create_test_criteria")
+        latency_profiler.end_task("scenario_setup")
         return criteria
 
     def __del__(self):

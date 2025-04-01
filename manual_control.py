@@ -65,6 +65,7 @@ try:
     import pygame
     from pygame.locals import K_ESCAPE
     from pygame.locals import K_F1
+    from pygame.locals import K_RIGHTBRACKET
     from pygame.locals import KMOD_CTRL
     from pygame.locals import KMOD_SHIFT
     from pygame.locals import K_TAB
@@ -197,9 +198,9 @@ class World(object):
         self.camera_manager.render(display)
         latency_profiler.end_task("camera_render")
         
-        latency_profiler.start_task("hud_render")
+        # The HUD profiling needs to be done inside the HUD render method
+        # to avoid counting the profiling display itself in the measurements
         self.hud.render(display)
-        latency_profiler.end_task("hud_render")
 
     def destroy_sensors(self):
         self.camera_manager.sensor.destroy()
@@ -235,7 +236,7 @@ class KeyboardControl(object):
         self._steer_cache = 0.0
         world.player.set_autopilot(self._autopilot_enabled)
         world.player.set_light_state(self._lights)
-        world.hud.notification("Press 'H' or '?' for help.", seconds=4.0)
+        world.hud.notification("Press 'H' or '?' for help. Press ']' to toggle profiling display.", seconds=4.0)
 
     def parse_events(self, client, world, clock):
         current_lights = self._lights
@@ -247,6 +248,8 @@ class KeyboardControl(object):
                     return True
                 elif event.key == K_F1:
                     world.hud.toggle_info()
+                elif event.key == K_RIGHTBRACKET:
+                    world.hud.toggle_profiling()
                 elif event.key == K_TAB:
                     world.camera_manager.toggle_camera()
                 elif event.key == K_r and not (pygame.key.get_mods() & KMOD_CTRL):
@@ -309,6 +312,9 @@ class KeyboardControl(object):
                 elif event.key == K_l:
                     # Use 'L' key to switch between lights:
                     # closed -> position -> low beam -> fog
+                    from srunner.scenarios.low_visibility_night import latency_profiler
+                    latency_profiler.start_task("weather")
+                    
                     if not self._lights & carla.VehicleLightState.Position:
                         world.hud.notification("Position lights")
                         current_lights |= carla.VehicleLightState.Position
@@ -323,6 +329,8 @@ class KeyboardControl(object):
                         current_lights ^= carla.VehicleLightState.Position
                         current_lights ^= carla.VehicleLightState.LowBeam
                         current_lights ^= carla.VehicleLightState.Fog
+                        
+                    latency_profiler.end_task("weather")
                 elif event.key == K_i:
                     current_lights ^= carla.VehicleLightState.Interior
                 elif event.key == K_z:
@@ -343,11 +351,17 @@ class KeyboardControl(object):
             else: # Remove the Reverse flag
                 current_lights &= ~carla.VehicleLightState.Reverse
             if current_lights != self._lights: # Change the light state only if necessary
+                from srunner.scenarios.low_visibility_night import latency_profiler
+                latency_profiler.start_task("weather")
                 self._lights = current_lights
                 world.player.set_light_state(carla.VehicleLightState(self._lights))
+                latency_profiler.end_task("weather")
             world.player.apply_control(self._control)
 
     def _parse_vehicle_keys(self, keys, milliseconds):
+        # Import profiler
+        from srunner.scenarios.low_visibility_night import latency_profiler
+        latency_profiler.start_task("vehicle_control")
         if keys[K_UP] or keys[K_w]:
             self._control.throttle = min(self._control.throttle + 0.1, 1.00)
         else:
@@ -374,6 +388,10 @@ class KeyboardControl(object):
         self._steer_cache = min(0.7, max(-0.7, self._steer_cache))
         self._control.steer = round(self._steer_cache, 1)
         self._control.hand_brake = keys[K_SPACE]
+        
+        # End vehicle control profiling
+        from srunner.scenarios.low_visibility_night import latency_profiler
+        latency_profiler.end_task("vehicle_control")
 
     @staticmethod
     def _is_quit_shortcut(key):
@@ -408,18 +426,30 @@ class HUD(object):
         self.frame = 0
         self.simulation_time = 0
         self._show_info = True
+        self._show_profiling = False  # Toggle for profiling display
         self._info_text = []
         self._server_clock = pygame.time.Clock()
 
     def on_world_tick(self, timestamp):
+        # Import profiler
+        from srunner.scenarios.low_visibility_night import latency_profiler
+        latency_profiler.start_task("physics_step")
+        
         self._server_clock.tick()
         self.server_fps = self._server_clock.get_fps()
         self.frame = timestamp.frame
         self.simulation_time = timestamp.elapsed_seconds
+        
+        latency_profiler.end_task("physics_step")
 
     def tick(self, world, clock):
+        # Import profiler
+        from srunner.scenarios.low_visibility_night import latency_profiler
+        latency_profiler.start_task("hud_tick")
+        
         self._notifications.tick(world, clock)
         if not self._show_info:
+            latency_profiler.end_task("hud_tick")
             return
         t = world.player.get_transform()
         v = world.player.get_velocity()
@@ -473,9 +503,16 @@ class HUD(object):
                     break
                 vehicle_type = get_actor_display_name(vehicle, truncate=22)
                 self._info_text.append('% 4dm %s' % (d, vehicle_type))
+        
+        # End HUD tick profiling
+        from srunner.scenarios.low_visibility_night import latency_profiler
+        latency_profiler.end_task("hud_tick")
 
     def toggle_info(self):
         self._show_info = not self._show_info
+        
+    def toggle_profiling(self):
+        self._show_profiling = not self._show_profiling
 
     def notification(self, text, seconds=2.0):
         self._notifications.set_text(text, seconds=seconds)
@@ -484,6 +521,10 @@ class HUD(object):
         self._notifications.set_text('Error: %s' % text, (255, 0, 0))
 
     def render(self, display):
+        # Import the profiler for timing
+        from srunner.scenarios.low_visibility_night import latency_profiler
+        latency_profiler.start_task("hud_render")
+        
         if self._show_info:
             info_surface = pygame.Surface((220, self.dim[1]))
             info_surface.set_alpha(100)
@@ -518,6 +559,55 @@ class HUD(object):
                     surface = self._font_mono.render(item, True, (255, 255, 255))
                     display.blit(surface, (8, v_offset))
                 v_offset += 18
+                
+        # Render profiling information if enabled
+        if self._show_profiling:
+            # Import the profiler here to avoid circular imports
+            from srunner.scenarios.low_visibility_night import latency_profiler
+            
+            # Get current metrics
+            metrics = latency_profiler.get_current_metrics()
+            
+            if metrics:
+                # Create profiling surface on the right side
+                profile_width = 300
+                profile_surface = pygame.Surface((profile_width, self.dim[1]))
+                profile_surface.set_alpha(150)
+                display.blit(profile_surface, (self.dim[0] - profile_width, 0))
+                
+                # Render metrics
+                v_offset = 4
+                title_surface = self._font_mono.render("LATENCY PROFILING", True, (255, 255, 255))
+                display.blit(title_surface, (self.dim[0] - profile_width + 10, v_offset))
+                v_offset += 25
+                
+                # Column headers
+                header_surface = self._font_mono.render("Task             Current   Avg (ms)", True, (180, 180, 180))
+                display.blit(header_surface, (self.dim[0] - profile_width + 10, v_offset))
+                v_offset += 20
+                
+                # Sort tasks by average time (descending)
+                sorted_tasks = sorted(metrics.items(), key=lambda x: x[1]['average'], reverse=True)
+                
+                for task_name, values in sorted_tasks:
+                    if v_offset + 18 > self.dim[1]:
+                        break
+                        
+                    # Make all profiling values green
+                    color = (0, 255, 0)  # Green for all tasks
+                        
+                    # Format the row with fixed width columns
+                    name_trimmed = task_name[:15].ljust(15)  # Limit and pad name
+                    current = f"{values['current']:6.2f}"
+                    avg = f"{values['average']:6.2f}"
+                    
+                    text = f"{name_trimmed} {current}    {avg}"
+                    text_surface = self._font_mono.render(text, True, color)
+                    display.blit(text_surface, (self.dim[0] - profile_width + 10, v_offset))
+                    v_offset += 18
+                    
+        latency_profiler.end_task("hud_render")
+        
         self._notifications.render(display)
         self.help.render(display)
 
@@ -611,6 +701,10 @@ class CollisionSensor(object):
         self = weak_self()
         if not self:
             return
+            
+        # Import profiler
+        from srunner.scenarios.low_visibility_night import latency_profiler
+        latency_profiler.start_task("collision_sensor")
         actor_type = get_actor_display_name(event.other_actor)
         self.hud.notification('Collision with %r' % actor_type)
         impulse = event.normal_impulse
@@ -618,6 +712,10 @@ class CollisionSensor(object):
         self.history.append((event.frame, intensity))
         if len(self.history) > 4000:
             self.history.pop(0)
+            
+        # End collision sensor profiling
+        from srunner.scenarios.low_visibility_night import latency_profiler
+        latency_profiler.end_task("collision_sensor")
 
 
 # ==============================================================================
@@ -675,8 +773,16 @@ class GnssSensor(object):
         self = weak_self()
         if not self:
             return
+            
+        # Import profiler
+        from srunner.scenarios.low_visibility_night import latency_profiler
+        latency_profiler.start_task("sensor_gnss")
         self.lat = event.latitude
         self.lon = event.longitude
+        
+        # End GNSS sensor profiling
+        from srunner.scenarios.low_visibility_night import latency_profiler
+        latency_profiler.end_task("sensor_gnss")
 
 
 # ==============================================================================
@@ -706,6 +812,10 @@ class IMUSensor(object):
         self = weak_self()
         if not self:
             return
+            
+        # Import profiler
+        from srunner.scenarios.low_visibility_night import latency_profiler
+        latency_profiler.start_task("sensor_imu")
         limits = (-99.9, 99.9)
         self.accelerometer = (
             max(limits[0], min(limits[1], sensor_data.accelerometer.x)),
@@ -716,6 +826,10 @@ class IMUSensor(object):
             max(limits[0], min(limits[1], math.degrees(sensor_data.gyroscope.y))),
             max(limits[0], min(limits[1], math.degrees(sensor_data.gyroscope.z))))
         self.compass = math.degrees(sensor_data.compass)
+        
+        # End IMU sensor profiling
+        from srunner.scenarios.low_visibility_night import latency_profiler
+        latency_profiler.end_task("sensor_imu")
 
 
 # ==============================================================================
@@ -859,6 +973,10 @@ class CameraManager(object):
         self = weak_self()
         if not self:
             return
+            
+        # Import profiler
+        from srunner.scenarios.low_visibility_night import latency_profiler
+        latency_profiler.start_task("camera_sensor_processing")
         if self.sensors[self.index][0].startswith('sensor.lidar'):
             points = np.frombuffer(image.raw_data, dtype=np.dtype('f4'))
             points = np.reshape(points, (int(points.shape[0] / 4), 4))
@@ -897,6 +1015,10 @@ class CameraManager(object):
             self.surface = pygame.surfarray.make_surface(array.swapaxes(0, 1))
         if self.recording:
             image.save_to_disk('_out/%08d' % image.frame)
+            
+        # End camera sensor processing profiling
+        from srunner.scenarios.low_visibility_night import latency_profiler
+        latency_profiler.end_task("camera_sensor_processing")
 
 
 # ==============================================================================
@@ -912,6 +1034,14 @@ def game_loop(args):
         client = carla.Client(args.host, args.port)
         client.set_timeout(20.0)
         sim_world = client.get_world()
+        
+        # Import profiler for weather updates
+        from srunner.scenarios.low_visibility_night import latency_profiler
+        
+        # Measure initial weather loading
+        latency_profiler.start_task("weather")
+        current_weather = sim_world.get_weather()
+        latency_profiler.end_task("weather")
 
         display = pygame.display.set_mode(
             (args.width, args.height),
@@ -930,6 +1060,15 @@ def game_loop(args):
             clock.tick_busy_loop(60)
             if controller.parse_events(client, world, clock):
                 return
+                
+            # Profile weather conditions update
+            from srunner.scenarios.low_visibility_night import latency_profiler
+            latency_profiler.start_task("weather")
+            # Force a weather update to measure performance
+            current_weather = sim_world.get_weather()
+            sim_world.set_weather(current_weather)
+            latency_profiler.end_task("weather")
+            
             if not world.tick(clock, args.wait_for_repetitions):
                 return
             world.render(display)
